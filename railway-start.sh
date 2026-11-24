@@ -48,8 +48,10 @@ case "${NODE_OPTIONS:-}" in
   *max-old-space-size*) ;;
   *)
     if [ "$mem_mb" -gt 0 ]; then
-      heap=$((mem_mb * 55 / 100))
-      if [ "$heap" -lt 192 ]; then heap=192; fi
+      # Below 1 GB the rest of the process (SQLite, Next.js, native buffers)
+      # needs about 200 MB beside the JavaScript heap: 40 % there, 55 % above.
+      if [ "$mem_mb" -lt 1000 ]; then heap=$((mem_mb * 40 / 100)); else heap=$((mem_mb * 55 / 100)); fi
+      if [ "$heap" -lt 160 ]; then heap=160; fi
       NODE_OPTIONS="${NODE_OPTIONS:+$NODE_OPTIONS }--max-old-space-size=$heap"
       export NODE_OPTIONS
     fi
@@ -57,9 +59,13 @@ case "${NODE_OPTIONS:-}" in
 esac
 small=
 if [ "$mem_mb" -gt 0 ] && [ "$mem_mb" -lt 1500 ]; then small=1; fi
-# Export/import worker threads: upstream starts cores-1 of them (31 on Railway).
+# Export/import worker threads: upstream starts cores-1 of them (31 on Railway),
+# each with a heap of its own. Below 1 GB they run on the request thread instead
+# (a worker thread cost about 50 MB and pushed a 0.5 GB service into an OOM kill).
 if [ -z "${FLOWPLAN_WORKERS:-}" ]; then
-  if [ -n "$small" ]; then FLOWPLAN_WORKERS=1; else FLOWPLAN_WORKERS=$((cpus > 1 ? cpus - 1 : 1)); fi
+  if [ "$mem_mb" -gt 0 ] && [ "$mem_mb" -lt 1000 ]; then FLOWPLAN_WORKERS=0
+  elif [ -n "$small" ]; then FLOWPLAN_WORKERS=1
+  else FLOWPLAN_WORKERS=$((cpus > 1 ? cpus - 1 : 1)); fi
 fi
 # Text recognition for scanned PDFs (Tesseract) needs a few hundred MB per job.
 if [ -z "${FLOWPLAN_OCR:-}" ] && [ "$mem_mb" -gt 0 ] && [ "$mem_mb" -lt 1000 ]; then
